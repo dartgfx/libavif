@@ -1,0 +1,9 @@
+name: libavif_workspace
+publish_to: none
+
+environment:
+  sdk: "^3.12.0"
+
+workspace:
+  - packages/flutter_libavif
+  - packages/libavif
