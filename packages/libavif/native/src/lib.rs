@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use std::thread;
 
-const ABI_VERSION: u32 = 4;
+const ABI_VERSION: u32 = 6;
 const ERROR_CAPACITY: usize = 512;
 const LAVIF_OK: i32 = 0;
 const LAVIF_INVALID_INPUT: i32 = 1;
@@ -70,6 +70,7 @@ unsafe extern "C" {
     fn lavif_bridge_decoder_destroy(decoder: *mut LavifBridgeDecoder);
     fn lavif_bridge_version() -> *const c_char;
     fn lavif_bridge_codec_versions(output: *mut c_char, capacity: usize);
+    fn lavif_bridge_features() -> *const c_char;
 }
 
 #[repr(C)]
@@ -78,6 +79,7 @@ pub struct LavifDecodeResult {
     status: i32,
     pixels: *mut u8,
     pixels_length: usize,
+    pixels_owner: *mut c_void,
     width: u32,
     height: u32,
     row_bytes: u32,
@@ -95,6 +97,7 @@ impl LavifDecodeResult {
             status,
             pixels: ptr::null_mut(),
             pixels_length: 0,
+            pixels_owner: ptr::null_mut(),
             width: 0,
             height: 0,
             row_bytes: 0,
@@ -113,6 +116,7 @@ pub struct LavifSequenceResult {
     handle: u64,
     pixels: *mut u8,
     pixels_length: usize,
+    pixels_owner: *mut c_void,
     width: u32,
     height: u32,
     row_bytes: u32,
@@ -137,6 +141,7 @@ impl LavifSequenceResult {
             handle: 0,
             pixels: ptr::null_mut(),
             pixels_length: 0,
+            pixels_owner: ptr::null_mut(),
             width: 0,
             height: 0,
             row_bytes: 0,
@@ -307,12 +312,13 @@ fn decode(
         return LavifDecodeResult::failure(request_id, status, error_message(&error));
     }
 
-    let (pixels, pixels_length) = leak_bytes(pixels);
+    let (pixels, pixels_length, pixels_owner) = own_pixels(pixels);
     LavifDecodeResult {
         request_id,
         status,
         pixels,
         pixels_length,
+        pixels_owner,
         width: info.width,
         height: info.height,
         row_bytes,
@@ -331,6 +337,7 @@ fn open_sequence(
     max_pixels: u32,
     target_width: u32,
     target_height: u32,
+    prefetch_first_frame: bool,
 ) -> LavifSequenceResult {
     let mut info = LavifBridgeInfo {
         width: 0,
@@ -373,6 +380,14 @@ fn open_sequence(
         );
     }
 
+    let Some(row_bytes) = info.width.checked_mul(4) else {
+        unsafe { lavif_bridge_decoder_destroy(decoder.as_ptr()) };
+        return LavifSequenceResult::failure(
+            request_id,
+            LAVIF_LIMIT_EXCEEDED,
+            b"AVIF row size exceeds the supported limit".to_vec(),
+        );
+    };
     let state = Arc::new(Mutex::new(SequenceState {
         _input: input,
         decoder: DecoderGuard(decoder),
@@ -396,22 +411,24 @@ fn open_sequence(
             )
         }
     };
-    registry.insert(handle, state);
+    registry.insert(handle, Arc::clone(&state));
+    drop(registry);
+    if prefetch_first_frame {
+        let mut result = sequence_next(request_id, state);
+        if result.status != LAVIF_OK {
+            if let Ok(mut registry) = sequences().lock() {
+                registry.remove(&handle);
+            }
+            return result;
+        }
+        result.handle = handle;
+        return result;
+    }
     let mut result = LavifSequenceResult::empty(request_id, LAVIF_OK);
     result.handle = handle;
     result.width = info.width;
     result.height = info.height;
-    result.row_bytes = match info.width.checked_mul(4) {
-        Some(row_bytes) => row_bytes,
-        None => {
-            registry.remove(&handle);
-            return LavifSequenceResult::failure(
-                request_id,
-                LAVIF_LIMIT_EXCEEDED,
-                b"AVIF row size exceeds the supported limit".to_vec(),
-            );
-        }
-    };
+    result.row_bytes = row_bytes;
     result.source_bit_depth = info.source_depth;
     result.has_alpha = info.has_alpha;
     result.frame_count = info.image_count;
@@ -488,10 +505,11 @@ fn sequence_next(request_id: u64, sequence: SharedSequence) -> LavifSequenceResu
         );
     }
 
-    let (pixels, pixels_length) = leak_bytes(pixels);
+    let (pixels, pixels_length, pixels_owner) = own_pixels(pixels);
     let mut result = LavifSequenceResult::empty(request_id, LAVIF_OK);
     result.pixels = pixels;
     result.pixels_length = pixels_length;
+    result.pixels_owner = pixels_owner;
     result.width = state.info.width;
     result.height = state.info.height;
     result.row_bytes = row_bytes;
@@ -562,6 +580,7 @@ struct SequenceOpenJob {
     max_pixels: u32,
     target_width: u32,
     target_height: u32,
+    prefetch_first_frame: bool,
     port: i64,
     post_c_object: PostCObject,
 }
@@ -676,6 +695,7 @@ fn decode_worker(receiver: Arc<Mutex<mpsc::Receiver<WorkerJob>>>, threads_per_wo
                         job.max_pixels,
                         job.target_width,
                         job.target_height,
+                        job.prefetch_first_frame,
                     )
                 }))
                 .unwrap_or_else(|_| {
@@ -831,6 +851,7 @@ pub extern "C" fn lavif_sequence_open_async(
     max_pixels: u32,
     target_width: u32,
     target_height: u32,
+    prefetch_first_frame: u8,
     port: i64,
     post_c_object: PostCObject,
     request_id: u64,
@@ -856,6 +877,7 @@ pub extern "C" fn lavif_sequence_open_async(
                 max_pixels,
                 target_width,
                 target_height,
+                prefetch_first_frame: prefetch_first_frame != 0,
                 port,
                 post_c_object,
             }))
@@ -956,6 +978,24 @@ fn leak_bytes(bytes: Vec<u8>) -> (*mut u8, usize) {
     (Box::into_raw(boxed) as *mut u8, length)
 }
 
+struct OwnedPixels {
+    _bytes: Box<[u8]>,
+}
+
+fn own_pixels(bytes: Vec<u8>) -> (*mut u8, usize, *mut c_void) {
+    let mut bytes = bytes.into_boxed_slice();
+    let pixels = bytes.as_mut_ptr();
+    let length = bytes.len();
+    let owner = Box::into_raw(Box::new(OwnedPixels { _bytes: bytes })).cast();
+    (pixels, length, owner)
+}
+
+unsafe fn release_pixels(owner: *mut c_void) {
+    if !owner.is_null() {
+        drop(Box::from_raw(owner.cast::<OwnedPixels>()));
+    }
+}
+
 unsafe fn release_bytes(bytes: *mut u8, length: usize) {
     if !bytes.is_null() && length != 0 {
         let slice = ptr::slice_from_raw_parts_mut(bytes, length);
@@ -975,8 +1015,23 @@ pub extern "C" fn lavif_decode_result_release(result: *mut LavifDecodeResult) {
 
 unsafe fn release_result(result: *mut LavifDecodeResult) {
     let result = Box::from_raw(result);
-    release_bytes(result.pixels, result.pixels_length);
+    release_pixels(result.pixels_owner);
     release_bytes(result.error, result.error_length);
+}
+
+#[no_mangle]
+pub extern "C" fn lavif_decode_result_take_pixels(result: *mut LavifDecodeResult) -> *mut c_void {
+    catch_unwind(AssertUnwindSafe(|| unsafe {
+        let Some(result) = result.as_mut() else {
+            return ptr::null_mut();
+        };
+        let owner = result.pixels_owner;
+        result.pixels = ptr::null_mut();
+        result.pixels_length = 0;
+        result.pixels_owner = ptr::null_mut();
+        owner
+    }))
+    .unwrap_or(ptr::null_mut())
 }
 
 #[no_mangle]
@@ -991,8 +1046,32 @@ pub extern "C" fn lavif_sequence_result_release(result: *mut LavifSequenceResult
 
 unsafe fn release_sequence_result(result: *mut LavifSequenceResult) {
     let result = Box::from_raw(result);
-    release_bytes(result.pixels, result.pixels_length);
+    release_pixels(result.pixels_owner);
     release_bytes(result.error, result.error_length);
+}
+
+#[no_mangle]
+pub extern "C" fn lavif_sequence_result_take_pixels(
+    result: *mut LavifSequenceResult,
+) -> *mut c_void {
+    catch_unwind(AssertUnwindSafe(|| unsafe {
+        let Some(result) = result.as_mut() else {
+            return ptr::null_mut();
+        };
+        let owner = result.pixels_owner;
+        result.pixels = ptr::null_mut();
+        result.pixels_length = 0;
+        result.pixels_owner = ptr::null_mut();
+        owner
+    }))
+    .unwrap_or(ptr::null_mut())
+}
+
+#[no_mangle]
+pub extern "C" fn lavif_pixels_release(owner: *mut c_void) {
+    let _ = catch_unwind(AssertUnwindSafe(|| unsafe {
+        release_pixels(owner);
+    }));
 }
 
 #[no_mangle]
@@ -1021,4 +1100,9 @@ pub extern "C" fn lavif_codec_versions() -> *const c_void {
             .cast()
     })
     .unwrap_or(ptr::null())
+}
+
+#[no_mangle]
+pub extern "C" fn lavif_features() -> *const c_void {
+    catch_unwind(|| unsafe { lavif_bridge_features().cast() }).unwrap_or(ptr::null())
 }

@@ -44,7 +44,7 @@ final class AvifImageStreamCompleter extends ImageStreamCompleter {
         onError: _reportLoadError,
       );
     }
-    source.bytes.then<void>(_open, onError: _reportLoadError);
+    source.bytes.then<void>(_prepareDecoder, onError: _reportLoadError);
   }
 
   final double scale;
@@ -66,6 +66,15 @@ final class AvifImageStreamCompleter extends ImageStreamCompleter {
   var _playsCompleted = 0;
   var _disposed = false;
 
+  Future<void> _prepareDecoder(Uint8List bytes) async {
+    try {
+      await Avif.warmUp();
+      if (!_disposed) _open(bytes);
+    } catch (error, stack) {
+      _reportDecodeError(error, stack);
+    }
+  }
+
   void _open(Uint8List bytes) {
     if (_disposed) return;
     final operation = AvifSequenceDecoder.startOpen(
@@ -73,6 +82,7 @@ final class AvifImageStreamCompleter extends ImageStreamCompleter {
       options: options,
       targetWidth: cacheWidth,
       targetHeight: cacheHeight,
+      prefetchFirstFrame: true,
     );
     _openOperation = operation;
     operation.result.then<void>(

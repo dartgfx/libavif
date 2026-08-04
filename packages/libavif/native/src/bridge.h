@@ -57,4 +57,6 @@ const char *lavif_bridge_version(void);
 
 void lavif_bridge_codec_versions(char *output, size_t capacity);
 
+const char *lavif_bridge_features(void);
+
 #endif

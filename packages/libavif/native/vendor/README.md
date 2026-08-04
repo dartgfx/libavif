@@ -11,3 +11,9 @@ unrelated third-party source trees are excluded.
 its static Meson/Ninja build for the target selected by the Dart native-assets
 hook. The upstream dav1d BSD-2-Clause license is retained as
 `libavif/ext/dav1d/COPYING`.
+
+`libavif/ext/libyuv/` contains libyuv commit
+`644251f252a84bf8ce91ff0aca86a9b16b069ab8`, the exact revision pinned by
+libavif 1.4.2. libavif's local-dependency build compiles it for accelerated
+YUV-to-RGBA conversion without fetching source during application builds. The
+upstream BSD-3-Clause license is retained as `libavif/ext/libyuv/LICENSE`.

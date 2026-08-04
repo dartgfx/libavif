@@ -24,7 +24,7 @@ fn main() {
         .define("AVIF_CODEC_RAV1E", "OFF")
         .define("AVIF_CODEC_SVT", "OFF")
         .define("AVIF_CODEC_AVM", "OFF")
-        .define("AVIF_LIBYUV", "OFF")
+        .define("AVIF_LIBYUV", "LOCAL")
         .define("AVIF_LIBSHARPYUV", "OFF")
         .define("AVIF_ZLIBPNG", "OFF")
         .define("AVIF_JPEG", "OFF")
@@ -61,11 +61,20 @@ fn main() {
                 out_dir.display()
             )
         });
+    let libyuv_library = find_library_recursive(&out_dir, libyuv_library_name(&target))
+        .unwrap_or_else(|| {
+            panic!(
+                "The local libyuv build did not produce {} under {}",
+                libyuv_library_name(&target),
+                out_dir.display()
+            )
+        });
 
     let mut bridge = cc::Build::new();
     bridge
         .file("src/bridge.c")
         .include(source_dir.join("include"))
+        .include(source_dir.join("ext/libyuv/include"))
         .warnings(true);
     if target.ends_with("apple-darwin") {
         bridge.flag("-mmacosx-version-min=11.0");
@@ -79,12 +88,28 @@ fn main() {
     println!("cargo:rustc-link-lib=static=avif");
     println!(
         "cargo:rustc-link-search=native={}",
+        libyuv_library
+            .parent()
+            .expect("libyuv library parent")
+            .display()
+    );
+    println!("cargo:rustc-link-lib=static=yuv");
+    println!(
+        "cargo:rustc-link-search=native={}",
         dav1d_library.parent().expect("dav1d library parent").display()
     );
     println!("cargo:rustc-link-lib=static=dav1d");
     println!("cargo:rerun-if-changed=src/bridge.c");
     println!("cargo:rerun-if-changed=src/bridge.h");
     println!("cargo:rerun-if-changed=vendor/libavif");
+}
+
+fn libyuv_library_name(target: &str) -> &'static str {
+    if target.contains("msvc") {
+        "yuv.lib"
+    } else {
+        "libyuv.a"
+    }
 }
 
 fn dav1d_library_name(target: &str) -> &'static str {

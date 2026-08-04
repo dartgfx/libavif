@@ -14,6 +14,8 @@ import 'native_support.dart';
 
 /// Entry point for decoding AVIF images.
 abstract final class Avif {
+  static Future<void>? _warmUpFuture;
+
   /// The linked libavif version.
   static String get nativeVersion {
     checkNativeAbi();
@@ -34,6 +36,16 @@ abstract final class Avif {
     return versions.cast<Utf8>().toDartString();
   }
 
+  /// Native acceleration features linked into this decoder build.
+  static String get nativeFeatures {
+    checkNativeAbi();
+    final features = lavifFeatures();
+    if (features == nullptr) {
+      throw StateError('The native decoder returned no feature information.');
+    }
+    return features.cast<Utf8>().toDartString();
+  }
+
   /// Number of persistent native workers used by [decode].
   static int get asyncWorkerCount {
     checkNativeAbi();
@@ -45,6 +57,13 @@ abstract final class Avif {
     checkNativeAbi();
     return lavifAsyncThreadsPerWorker();
   }
+
+  /// Prepares the persistent native decode workers off the calling isolate.
+  ///
+  /// Applications may await this during startup to remove worker creation from
+  /// the first decode. Repeated calls share the same initialization.
+  static Future<void> warmUp() =>
+      _warmUpFuture ??= Isolate.run(_warmUpNativeWorkers);
 
   /// Decodes [bytes] off the calling isolate.
   static Future<AvifFrame> decode(
@@ -139,7 +158,7 @@ abstract final class Avif {
           );
         }
 
-        return _frameFromResult(result);
+        return _frameFromResult(resultPointer);
       } finally {
         lavifDecodeResultRelease(resultPointer);
       }
@@ -163,10 +182,17 @@ abstract final class Avif {
           'The native decoder returned an empty pixel buffer.',
         );
       }
-      return _frameFromResult(result);
+      return _frameFromResult(resultPointer);
     } finally {
       lavifDecodeResultRelease(resultPointer);
     }
+  }
+}
+
+void _warmUpNativeWorkers() {
+  checkNativeAbi();
+  if (lavifAsyncWorkerCount() <= 0 || lavifAsyncThreadsPerWorker() <= 0) {
+    throw StateError('Could not start the native AVIF decode worker pool.');
   }
 }
 
@@ -181,14 +207,40 @@ final class AvifDecodeOperation {
   bool cancel() => _cancel();
 }
 
-AvifFrame _frameFromResult(LavifDecodeResult result) => AvifFrame(
-  pixels: Uint8List.fromList(result.pixels.asTypedList(result.pixelsLength)),
-  width: result.width,
-  height: result.height,
-  rowBytes: result.rowBytes,
-  sourceBitDepth: result.sourceBitDepth,
-  hasAlpha: result.hasAlpha != 0,
-);
+AvifFrame _frameFromResult(Pointer<LavifDecodeResult> pointer) {
+  final result = pointer.ref;
+  final pixels = result.pixels;
+  final pixelsLength = result.pixelsLength;
+  final width = result.width;
+  final height = result.height;
+  final rowBytes = result.rowBytes;
+  final sourceBitDepth = result.sourceBitDepth;
+  final hasAlpha = result.hasAlpha != 0;
+  final owner = lavifDecodeResultTakePixels(pointer);
+  if (owner == nullptr) {
+    throw const AvifException(
+      AvifErrorCode.internal,
+      'The native decoder did not transfer its pixel buffer.',
+    );
+  }
+  try {
+    return AvifFrame(
+      pixels: pixels.asTypedList(
+        pixelsLength,
+        finalizer: lavifPixelsReleaseAddress,
+        token: owner,
+      ),
+      width: width,
+      height: height,
+      rowBytes: rowBytes,
+      sourceBitDepth: sourceBitDepth,
+      hasAlpha: hasAlpha,
+    );
+  } catch (_) {
+    lavifPixelsRelease(owner);
+    rethrow;
+  }
+}
 
 final class _AsyncDecodeDispatcher {
   _AsyncDecodeDispatcher() : _workerCount = lavifAsyncWorkerCount() {

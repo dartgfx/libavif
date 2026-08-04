@@ -15,6 +15,8 @@ final class LavifDecodeResult extends Struct {
   @Size()
   external int pixelsLength;
 
+  external Pointer<Void> pixelsOwner;
+
   @Uint32()
   external int width;
 
@@ -50,6 +52,8 @@ final class LavifSequenceResult extends Struct {
 
   @Size()
   external int pixelsLength;
+
+  external Pointer<Void> pixelsOwner;
 
   @Uint32()
   external int width;
@@ -119,6 +123,14 @@ external Pointer<LavifDecodeResult> lavifDecodeRgba8(
 )
 external void lavifDecodeResultRelease(Pointer<LavifDecodeResult> result);
 
+@Native<Pointer<Void> Function(Pointer<LavifDecodeResult>)>(
+  symbol: 'lavif_decode_result_take_pixels',
+  isLeaf: true,
+)
+external Pointer<Void> lavifDecodeResultTakePixels(
+  Pointer<LavifDecodeResult> result,
+);
+
 typedef LavifPostCObjectNative =
     Int8 Function(Int64 port, Pointer<Dart_CObject> message);
 
@@ -173,6 +185,7 @@ external int lavifDecodeRgba8Async(
     Uint32,
     Uint32,
     Uint32,
+    Uint8,
     Int64,
     Pointer<NativeFunction<LavifPostCObjectNative>>,
     Uint64,
@@ -186,6 +199,7 @@ external int lavifSequenceOpenAsync(
   int maxPixels,
   int targetWidth,
   int targetHeight,
+  int prefetchFirstFrame,
   int port,
   Pointer<NativeFunction<LavifPostCObjectNative>> postCObject,
   int requestId,
@@ -229,6 +243,22 @@ external void lavifSequenceRelease(int handle);
 )
 external void lavifSequenceResultRelease(Pointer<LavifSequenceResult> result);
 
+@Native<Pointer<Void> Function(Pointer<LavifSequenceResult>)>(
+  symbol: 'lavif_sequence_result_take_pixels',
+  isLeaf: true,
+)
+external Pointer<Void> lavifSequenceResultTakePixels(
+  Pointer<LavifSequenceResult> result,
+);
+
+@Native<Void Function(Pointer<Void>)>(symbol: 'lavif_pixels_release')
+external void lavifPixelsRelease(Pointer<Void> owner);
+
+final lavifPixelsReleaseAddress =
+    Native.addressOf<NativeFunction<Void Function(Pointer<Void>)>>(
+      lavifPixelsRelease,
+    );
+
 @Native<Uint32 Function()>(symbol: 'lavif_abi_version', isLeaf: true)
 external int lavifAbiVersion();
 
@@ -237,3 +267,6 @@ external Pointer<Char> lavifLibavifVersion();
 
 @Native<Pointer<Char> Function()>(symbol: 'lavif_codec_versions', isLeaf: true)
 external Pointer<Char> lavifCodecVersions();
+
+@Native<Pointer<Char> Function()>(symbol: 'lavif_features', isLeaf: true)
+external Pointer<Char> lavifFeatures();

@@ -106,32 +106,42 @@ final class AvifSequenceOpenOperation {
 
 /// Stateful decoder for one still or animated AVIF source.
 final class AvifSequenceDecoder {
-  AvifSequenceDecoder._(this._handle, this.info);
+  AvifSequenceDecoder._(this._handle, this.info, this._prefetchedFrame);
 
   final int _handle;
   final AvifSequenceInfo info;
+  AvifSequenceFrame? _prefetchedFrame;
   _NativeSequenceOperation? _activeOperation;
   var _disposed = false;
 
   /// Opens [bytes] on the bounded native worker pool.
+  ///
+  /// When [prefetchFirstFrame] is true, opening also decodes frame zero and
+  /// the first [nextFrame] call returns that prefetched frame without another
+  /// native worker submission. The default preserves metadata-only opening.
   static Future<AvifSequenceDecoder> open(
     Uint8List bytes, {
     AvifDecodeOptions options = const AvifDecodeOptions(),
     int? targetWidth,
     int? targetHeight,
+    bool prefetchFirstFrame = false,
   }) => startOpen(
     bytes,
     options: options,
     targetWidth: targetWidth,
     targetHeight: targetHeight,
+    prefetchFirstFrame: prefetchFirstFrame,
   ).result;
 
   /// Starts a cancellable sequence-open operation.
+  ///
+  /// [prefetchFirstFrame] has the same behavior as in [open].
   static AvifSequenceOpenOperation startOpen(
     Uint8List bytes, {
     AvifDecodeOptions options = const AvifDecodeOptions(),
     int? targetWidth,
     int? targetHeight,
+    bool prefetchFirstFrame = false,
   }) {
     options.validate();
     validateAvifTargetSize(
@@ -145,6 +155,7 @@ final class AvifSequenceDecoder {
       options: options,
       targetWidth: targetWidth,
       targetHeight: targetHeight,
+      prefetchFirstFrame: prefetchFirstFrame,
     );
     return AvifSequenceOpenOperation._(
       operation.result.then(_decoderFromOpenResult),
@@ -155,6 +166,11 @@ final class AvifSequenceDecoder {
   /// Decodes the next frame, or returns `null` after the final frame.
   Future<AvifSequenceFrame?> nextFrame() async {
     _ensureAvailable();
+    final prefetchedFrame = _prefetchedFrame;
+    if (prefetchedFrame != null) {
+      _prefetchedFrame = null;
+      return prefetchedFrame;
+    }
     final operation = _SequenceDispatcher.instance.next(_handle);
     _activeOperation = operation;
     try {
@@ -168,6 +184,7 @@ final class AvifSequenceDecoder {
   /// Rewinds the decoder to before its first frame.
   Future<void> reset() async {
     _ensureAvailable();
+    _prefetchedFrame = null;
     final operation = _SequenceDispatcher.instance.reset(_handle);
     _activeOperation = operation;
     try {
@@ -187,6 +204,7 @@ final class AvifSequenceDecoder {
   void dispose() {
     if (_disposed) return;
     _disposed = true;
+    _prefetchedFrame = null;
     _activeOperation?.cancel();
     lavifSequenceRelease(_handle);
   }
@@ -226,21 +244,19 @@ AvifSequenceDecoder _decoderFromOpenResult(
               'The AVIF sequence has an invalid repetition count.',
             ),
           };
-    return AvifSequenceDecoder._(
-      handle,
-      AvifSequenceInfo(
-        width: result.width,
-        height: result.height,
-        sourceBitDepth: result.sourceBitDepth,
-        hasAlpha: result.hasAlpha != 0,
-        frameCount: result.frameCount,
-        duration: _scaledDuration(
-          result.durationInTimescales,
-          result.timescale,
-        ),
-        repetition: repetition,
-      ),
+    final info = AvifSequenceInfo(
+      width: result.width,
+      height: result.height,
+      sourceBitDepth: result.sourceBitDepth,
+      hasAlpha: result.hasAlpha != 0,
+      frameCount: result.frameCount,
+      duration: _scaledDuration(result.durationInTimescales, result.timescale),
+      repetition: repetition,
     );
+    final prefetchedFrame = result.pixels == nullptr
+        ? null
+        : _takeSequenceFrame(pointer);
+    return AvifSequenceDecoder._(handle, info, prefetchedFrame);
   } catch (_) {
     if (handle != 0) lavifSequenceRelease(handle);
     rethrow;
@@ -256,32 +272,62 @@ AvifSequenceFrame? _frameFromSequenceResult(
     final result = pointer.ref;
     if (result.status == 7) return null;
     if (result.status != 0) throw _sequenceException(result);
-    if (result.pixels == nullptr || result.pixelsLength == 0) {
-      throw const AvifException(
-        AvifErrorCode.internal,
-        'The native decoder returned an empty sequence frame.',
-      );
-    }
-    return AvifSequenceFrame(
-      image: AvifFrame(
-        pixels: Uint8List.fromList(
-          result.pixels.asTypedList(result.pixelsLength),
-        ),
-        width: result.width,
-        height: result.height,
-        rowBytes: result.rowBytes,
-        sourceBitDepth: result.sourceBitDepth,
-        hasAlpha: result.hasAlpha != 0,
-      ),
-      index: result.frameIndex,
-      duration: _scaledDuration(
-        result.frameDurationInTimescales,
-        result.frameTimescale,
-      ),
-    );
+    return _takeSequenceFrame(pointer);
   } finally {
     lavifSequenceResultRelease(pointer);
   }
+}
+
+AvifSequenceFrame _takeSequenceFrame(Pointer<LavifSequenceResult> pointer) {
+  final result = pointer.ref;
+  if (result.pixels == nullptr || result.pixelsLength == 0) {
+    throw const AvifException(
+      AvifErrorCode.internal,
+      'The native decoder returned an empty sequence frame.',
+    );
+  }
+  final pixels = result.pixels;
+  final pixelsLength = result.pixelsLength;
+  final width = result.width;
+  final height = result.height;
+  final rowBytes = result.rowBytes;
+  final sourceBitDepth = result.sourceBitDepth;
+  final hasAlpha = result.hasAlpha != 0;
+  final frameIndex = result.frameIndex;
+  final frameDuration = _scaledDuration(
+    result.frameDurationInTimescales,
+    result.frameTimescale,
+  );
+  final owner = lavifSequenceResultTakePixels(pointer);
+  if (owner == nullptr) {
+    throw const AvifException(
+      AvifErrorCode.internal,
+      'The native decoder did not transfer its sequence pixel buffer.',
+    );
+  }
+  late final Uint8List dartPixels;
+  try {
+    dartPixels = pixels.asTypedList(
+      pixelsLength,
+      finalizer: lavifPixelsReleaseAddress,
+      token: owner,
+    );
+  } catch (_) {
+    lavifPixelsRelease(owner);
+    rethrow;
+  }
+  return AvifSequenceFrame(
+    image: AvifFrame(
+      pixels: dartPixels,
+      width: width,
+      height: height,
+      rowBytes: rowBytes,
+      sourceBitDepth: sourceBitDepth,
+      hasAlpha: hasAlpha,
+    ),
+    index: frameIndex,
+    duration: frameDuration,
+  );
 }
 
 Duration _scaledDuration(int units, int timescale) {
@@ -326,6 +372,7 @@ final class _SequenceDispatcher {
     required AvifDecodeOptions options,
     required int? targetWidth,
     required int? targetHeight,
+    required bool prefetchFirstFrame,
   }) {
     if (_isExhausted(bytes.length)) return _exhausted();
     final input = lavifInputAllocate(bytes.length);
@@ -351,6 +398,7 @@ final class _SequenceDispatcher {
       options: options,
       targetWidth: targetWidth,
       targetHeight: targetHeight,
+      prefetchFirstFrame: prefetchFirstFrame,
     );
     _reservedInputBytes += bytes.length;
     return _enqueue(request);
@@ -436,6 +484,7 @@ final class _SequenceDispatcher {
           request.options!.maxPixels,
           request.targetWidth ?? 0,
           request.targetHeight ?? 0,
+          request.prefetchFirstFrame ? 1 : 0,
           _port.sendPort.nativePort,
           NativeApi.postCObject,
           request.id,
@@ -519,6 +568,7 @@ final class _SequenceRequest {
     this.options,
     this.targetWidth,
     this.targetHeight,
+    this.prefetchFirstFrame = false,
     this.handle = 0,
   });
 
@@ -529,6 +579,7 @@ final class _SequenceRequest {
   final AvifDecodeOptions? options;
   final int? targetWidth;
   final int? targetHeight;
+  final bool prefetchFirstFrame;
   final int handle;
   final Completer<Pointer<LavifSequenceResult>> completer = Completer();
   bool cancelled = false;

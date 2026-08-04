@@ -4,8 +4,9 @@
 package builds libavif and its decoder from source through Dart native assets;
 applications do not download or bundle repository-hosted prebuilt binaries.
 
-The decoder backend is dav1d. The package does not link libaom or fall back to
-a platform decoder.
+The decoder backend is dav1d, with libyuv accelerating supported YUV-to-RGBA
+conversions. The package does not link libaom or fall back to a platform
+decoder.
 
 ```dart
 final bytes = await File('image.avif').readAsBytes();
@@ -22,8 +23,13 @@ short-lived consumers. `Avif.decodeSync` is available for worker isolates and
 command-line pipelines that already control scheduling. All three accept
 `AvifDecodeOptions` with explicit thread, dimension, and pixel limits.
 
+Call `await Avif.warmUp()` during application startup to prepare that worker
+pool off the calling isolate before the first image is requested. Repeated
+calls share one initialization.
+
 Use `targetWidth` and `targetHeight` to scale during native decode, before the
-RGBA allocation and Dart copy:
+RGBA allocation. Decoded pixels transfer directly into a finalizer-owned Dart
+view without a second pixel-buffer copy:
 
 ```dart
 final thumbnail = await Avif.decode(
@@ -54,18 +60,27 @@ try {
 }
 ```
 
+Set `prefetchFirstFrame: true` when the first frame will be consumed
+immediately. Opening then decodes frame zero in the same native worker job, and
+the first `nextFrame` call returns it without another queue round trip.
+
 The decoder preserves per-frame timing and finite, infinite, or unknown
 repetition metadata. It owns its encoded input until `dispose`, serializes
 frame operations through the bounded native worker pool, and supports
 cancellation while opening. `Avif.decode` remains deliberately static-only so
 callers cannot accidentally reduce an animation to its first frame.
 
+`Avif.nativeVersion`, `Avif.nativeCodecVersions`, and `Avif.nativeFeatures`
+report the exact linked build. This source release reports `libyuv:1924` as a
+required acceleration feature.
+
 Render transforms that would change the displayed image fail with
 `AvifErrorCode.unsupported`. Web is not supported by this native-assets
 package.
 
 The vendored libavif source is version 1.4.2. The vendored dav1d source is
-version 1.5.4. Both retain their BSD licenses in the vendored source tree.
+version 1.5.4, and libyuv is the exact revision pinned by libavif 1.4.2. All
+retain their BSD licenses in the vendored source tree.
 
 Building requires Rust, CMake, Meson, and Ninja on the host. x86 and x64
 targets additionally require NASM. Missing tools are reported as build errors;

@@ -6,7 +6,7 @@ import 'avif_decode_options.dart';
 import 'avif_exception.dart';
 import 'native_bindings.dart';
 
-const expectedNativeAbiVersion = 4;
+const expectedNativeAbiVersion = 6;
 
 void checkNativeAbi() {
   final version = lavifAbiVersion();

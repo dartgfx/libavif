@@ -36,6 +36,10 @@ All providers display animated AVIF through Flutter's standard `Image` widget.
 Frame timing and finite or infinite repetition come from the AVIF container.
 Frame scheduling pauses when the stream has no listeners, and native sequence
 resources are released when Flutter disposes the stream.
+Providers also begin native worker initialization while source bytes load, so
+startup work stays off the UI isolate and can overlap asset or network I/O.
+Sequence opening also prefetches frame zero in the same native job, avoiding a
+second worker-queue round trip before an image can be displayed.
 
 Applications that already own transport and caching can subclass
 `AvifImageProvider` instead of surrendering those policies to the package:

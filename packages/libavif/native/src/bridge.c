@@ -1,9 +1,13 @@
 #include "bridge.h"
 
 #include <avif/avif.h>
+#include <libyuv/version.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+#define LAVIF_STRINGIFY_INNER(value) #value
+#define LAVIF_STRINGIFY(value) LAVIF_STRINGIFY_INNER(value)
 
 struct LavifBridgeDecoder {
     avifDecoder *decoder;
@@ -299,4 +303,8 @@ void lavif_bridge_codec_versions(char *output, size_t capacity) {
     char versions[256] = {0};
     avifCodecVersions(versions);
     (void)snprintf(output, capacity, "%s", versions);
+}
+
+const char *lavif_bridge_features(void) {
+    return "libyuv:" LAVIF_STRINGIFY(LIBYUV_VERSION);
 }
