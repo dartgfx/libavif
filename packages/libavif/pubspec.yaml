@@ -1,6 +1,6 @@
 name: libavif
 description: Native AVIF decoding for Dart, built from libavif source with native assets.
-version: 0.1.0
+version: 0.1.1
 repository: https://github.com/dartgfx/libavif
 topics:
   - avif

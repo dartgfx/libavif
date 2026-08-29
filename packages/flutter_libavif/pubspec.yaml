@@ -1,6 +1,6 @@
 name: flutter_libavif
 description: Flutter ImageProvider adapters for source-built native libavif decoding.
-version: 0.1.0
+version: 0.1.1
 repository: https://github.com/dartgfx/libavif
 topics:
   - avif
@@ -16,7 +16,7 @@ resolution: workspace
 dependencies:
   flutter:
     sdk: flutter
-  libavif: ^0.1.0
+  libavif: ^0.1.1
 
 dev_dependencies:
   flutter_test:
