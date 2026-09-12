@@ -49,10 +49,15 @@ void _requireBuildTool(String executable, String reason) {
 
 Map<String, String> _cargoEnvironment(BuildInput input) {
   final code = input.config.code;
-  if (code.targetOS == OS.iOS) {
-    return const {'IPHONEOS_DEPLOYMENT_TARGET': '13.0'};
+  final environment = <String, String>{};
+  if (Platform.isWindows) {
+    environment['CARGO_TARGET_DIR'] = _cargoTargetDirectory(input);
   }
-  if (code.targetOS != OS.android) return const {};
+  if (code.targetOS == OS.iOS) {
+    environment['IPHONEOS_DEPLOYMENT_TARGET'] = '13.0';
+    return environment;
+  }
+  if (code.targetOS != OS.android) return environment;
 
   final compiler = code.cCompiler?.compiler;
   if (compiler == null || !compiler.isScheme('file')) {
@@ -69,13 +74,30 @@ Map<String, String> _cargoEnvironment(BuildInput input) {
       'Android NDK CMake toolchain not found at ${toolchain.path}.',
     );
   }
-  return {
+  environment.addAll({
     'ANDROID_NDK_ROOT': ndk.path,
     'ANDROID_NDK_HOME': ndk.path,
     'CMAKE_TOOLCHAIN_FILE': toolchain.path,
     'LAVIF_ANDROID_ABI': _androidAbi(code.targetArchitecture),
     'LAVIF_ANDROID_NDK_API': code.android.targetNdkApi.toString(),
-  };
+  });
+  return environment;
+}
+
+String _cargoTargetDirectory(BuildInput input) {
+  var directory = Directory.fromUri(input.outputDirectory);
+  while (directory.parent.path != directory.path) {
+    if (_basename(directory) == '.dart_tool') {
+      return Directory.fromUri(
+        directory.uri.resolve('rust/${input.packageName}/'),
+      ).path;
+    }
+    directory = directory.parent;
+  }
+  throw StateError(
+    'Could not derive the project .dart_tool directory from '
+    '${input.outputDirectory.toFilePath()}.',
+  );
 }
 
 String _androidAbi(Architecture architecture) {

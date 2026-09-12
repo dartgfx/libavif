@@ -53,14 +53,13 @@ fn main() {
     }
 
     let installed = config.build();
-    let dav1d_library = find_library_recursive(&out_dir, dav1d_library_name(&target))
-        .unwrap_or_else(|| {
-            panic!(
-                "The local dav1d build did not produce {} under {}",
-                dav1d_library_name(&target),
-                out_dir.display()
-            )
-        });
+    let dav1d_library = find_dav1d_library(&out_dir, &target).unwrap_or_else(|| {
+        panic!(
+            "The local dav1d build did not produce a supported static library under {}",
+            out_dir.display()
+        )
+    });
+    let dav1d_library = normalize_dav1d_library(&out_dir, &target, dav1d_library);
     let libyuv_library = find_library_recursive(&out_dir, libyuv_library_name(&target))
         .unwrap_or_else(|| {
             panic!(
@@ -112,12 +111,45 @@ fn libyuv_library_name(target: &str) -> &'static str {
     }
 }
 
-fn dav1d_library_name(target: &str) -> &'static str {
+fn find_dav1d_library(directory: &Path, target: &str) -> Option<PathBuf> {
     if target.contains("msvc") {
-        "dav1d.lib"
+        let normalized = directory.join("libavif-link/dav1d.lib");
+        if normalized.exists() {
+            fs::remove_file(&normalized).unwrap_or_else(|error| {
+                panic!(
+                    "Failed to remove stale normalized dav1d library {}: {error}",
+                    normalized.display()
+                )
+            });
+        }
+        find_library_recursive(directory, "dav1d.lib")
+            .or_else(|| find_library_recursive(directory, "libdav1d.a"))
     } else {
-        "libdav1d.a"
+        find_library_recursive(directory, "libdav1d.a")
     }
+}
+
+fn normalize_dav1d_library(directory: &Path, target: &str, library: PathBuf) -> PathBuf {
+    if !target.contains("msvc") || library.file_name().is_some_and(|name| name == "dav1d.lib") {
+        return library;
+    }
+
+    let link_directory = directory.join("libavif-link");
+    fs::create_dir_all(&link_directory).unwrap_or_else(|error| {
+        panic!(
+            "Failed to create dav1d link directory {}: {error}",
+            link_directory.display()
+        )
+    });
+    let normalized = link_directory.join("dav1d.lib");
+    fs::copy(&library, &normalized).unwrap_or_else(|error| {
+        panic!(
+            "Failed to normalize dav1d library {} as {}: {error}",
+            library.display(),
+            normalized.display()
+        )
+    });
+    normalized
 }
 
 fn find_library_recursive(directory: &Path, name: &str) -> Option<PathBuf> {
