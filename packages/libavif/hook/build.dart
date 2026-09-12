@@ -88,8 +88,16 @@ String _cargoTargetDirectory(BuildInput input) {
   var directory = Directory.fromUri(input.outputDirectory);
   while (directory.parent.path != directory.path) {
     if (_basename(directory) == '.dart_tool') {
+      final projectDirectory = directory.parent.absolute;
+      var volumeRoot = projectDirectory;
+      while (volumeRoot.parent.path != volumeRoot.path) {
+        volumeRoot = volumeRoot.parent;
+      }
       return Directory.fromUri(
-        directory.uri.resolve('rust/${input.packageName}/'),
+        volumeRoot.uri.resolve(
+          '.native_toolchain_rust/'
+          '${_pathKey(projectDirectory.path)}/${input.packageName}/',
+        ),
       ).path;
     }
     directory = directory.parent;
@@ -98,6 +106,14 @@ String _cargoTargetDirectory(BuildInput input) {
     'Could not derive the project .dart_tool directory from '
     '${input.outputDirectory.toFilePath()}.',
   );
+}
+
+String _pathKey(String value) {
+  var hash = 0x811c9dc5;
+  for (final unit in value.toLowerCase().codeUnits) {
+    hash = ((hash ^ unit) * 0x01000193) & 0xffffffff;
+  }
+  return hash.toRadixString(16).padLeft(8, '0');
 }
 
 String _androidAbi(Architecture architecture) {

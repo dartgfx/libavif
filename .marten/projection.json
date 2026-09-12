@@ -3,13 +3,13 @@
   "projection": "dartgfx/libavif",
   "kind": "workspace",
   "source": {
-    "commit": "a8e38458d8e1faa4a13d72693d8d804448306c09",
+    "commit": "b4b0a5af763cf86c0f6370cbeba6303007b53d61",
     "dirty": true
   },
   "manifest": {
     "hash": "git:98552fbc82f3fc5e23796dc294acccd28e69bceb"
   },
-  "generatedTreeHash": "git:0a82cf569fdb4f879b6563197ab050a2001fe684",
+  "generatedTreeHash": "git:640bdd5a7d52aaa946141bb9c2921973c2b1d06c",
   "packages": {
     "flutter_libavif": "0.1.1",
     "libavif": "0.1.1"
@@ -36,12 +36,12 @@
     "packages/flutter_libavif/test/flutter_libavif_test.dart": "git:17afc9a749d6b4205c4a7783fee4c51d65ac2419",
     "packages/flutter_libavif/test/support/fixtures.dart": "git:47b70b47a1edbe604ff18eb38653a509c11ef005",
     "packages/libavif/.gitignore": "git:e31af4bcbe998ee4f065c8aabae5bb7ff1651b6b",
-    "packages/libavif/CHANGELOG.md": "git:c99e42a20a9747b53bcab5c928375223426566ee",
+    "packages/libavif/CHANGELOG.md": "git:070a7f5cf23122eeabdab23a646c19136f8f5b54",
     "packages/libavif/LICENSE": "git:a4bd64dccc8bdbc3542c5377f2732239ff66641b",
     "packages/libavif/README.md": "git:10536a1e3c210f67a127865522491ed50a263839",
     "packages/libavif/analysis_options.yaml": "git:572dd239d0976799433e2a9c56e7e02be86d61b1",
     "packages/libavif/example/decode.dart": "git:8210364cac8c7a66bc155798b24465af1507a863",
-    "packages/libavif/hook/build.dart": "git:16a261da565a889a76e1eb47dd3115c42a04a441",
+    "packages/libavif/hook/build.dart": "git:397cd992f2b5b7fdf7f8fb62342ce92cd8fce1b9",
     "packages/libavif/lib/libavif.dart": "git:02cea23b8163ad18b83e00c3a487cac139179084",
     "packages/libavif/lib/src/avif.dart": "git:1106c3a6097b12139178405a5b837b0da2cd45b7",
     "packages/libavif/lib/src/avif_decode_options.dart": "git:00f3589e5280385303c820a76307de5e35f1dc52",

@@ -1,7 +1,7 @@
 ## Unreleased
 
 - Support Meson's `libdav1d.a` static-library output when building with MSVC.
-- Keep Windows native build output in a shallow project-local directory.
+- Keep Windows native build output in a shallow project-keyed directory.
 
 ## 0.1.1
 
